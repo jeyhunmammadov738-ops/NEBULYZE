@@ -1,0 +1,26 @@
+# Core
+python-telegram-bot>=20.0
+moviepy>=2.0.0
+python-dotenv
+mutagen
+pillow
+httpx>=0.24.0
+pydub
+yt-dlp
+opencv-python-headless
+imageio-ffmpeg>=0.4.9
+
+# Unified Ecosystem
+fastapi
+uvicorn
+python-multipart
+celery
+redis
+psycopg2-binary
+sqlalchemy
+aiosqlite
+asyncpg
+
+# Additional Packages
+slowapi==0.1.7
+pybreaker==0.4.5
