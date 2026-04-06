@@ -18,21 +18,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# List of high-uptime Cobalt API instances for rotation
+COBALT_INSTANCES = [
+    "https://api.cobalt.tools/",
+    "https://capi.3kh0.net/",
+    "https://cobalt-api.meowing.de/",
+    "https://cobalt-backend.canine.tools/",
+]
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Welcome to the YouTube to MP3 Downloader Bot!\n\n"
-        "Simply send me a YouTube link, and I'll convert it to a high-quality MP3 file for you. 🎵"
+        "👋 Welcome back! Your YouTube to MP3 Bot is ready for another round.\n\n"
+        "Simply send me a link, and I'll use my high-resiliency API rotation to convert it for you. 🎵"
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "To use this bot, just paste a YouTube video link. I'll handle the rest!\n\n"
-        "Supported platforms: YouTube, YouTube Music, and more (via Cobalt API / yt-dlp)."
+        "This bot is now using a multi-API rotation system for maximum reliability.\n\n"
+        "If one method is blocked, it automatically switches to another until your download succeeds."
     )
 
 def download_audio_cobalt(url):
-    """Downloads audio from YouTube using Cobalt API and converts it to MP3."""
-    api_url = "https://api.cobalt.tools/"
+    """Downloads audio from YouTube using Cobalt API rotation."""
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json"
@@ -43,30 +50,42 @@ def download_audio_cobalt(url):
         "audioFormat": "mp3",
         "audioBitrate": "320"
     }
-    
-    response = requests.post(api_url, json=payload, headers=headers)
-    
-    if response.status_code == 200:
-        data = response.json()
-        if data.get("status") in ["tunnel", "redirect"]:
-            download_url = data.get("url")
-            # Get the filename from headers or use title if available
-            filename_response = requests.get(download_url, stream=True)
-            title = data.get("filename", "audio").replace(".mp3", "")
-            mp3_path = f"downloads/{title}.mp3"
+
+    last_error = None
+    for instance in COBALT_INSTANCES:
+        try:
+            logger.info(f"Attempting download via {instance}...")
+            response = requests.post(instance, json=payload, headers=headers, timeout=15)
             
-            with open(mp3_path, 'wb') as f:
-                for chunk in filename_response.iter_content(chunk_size=8192):
-                    f.write(chunk)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("status") in ["tunnel", "redirect"]:
+                    download_url = data.get("url")
+                    title = data.get("filename", "audio").replace(".mp3", "")
+                    mp3_path = f"downloads/{title}.mp3"
+                    
+                    # Download the actual file from the Cobalt URL
+                    file_response = requests.get(download_url, stream=True, timeout=30)
+                    with open(mp3_path, 'wb') as f:
+                        for chunk in file_response.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+                    
+                    logger.info(f"Successfully downloaded via {instance}")
+                    return mp3_path, title
+                else:
+                    logger.warning(f"Instance {instance} returned non-success: {data}")
+            else:
+                logger.warning(f"Instance {instance} failed with status {response.status_code}")
+        except Exception as e:
+            logger.warning(f"Error with instance {instance}: {e}")
+            last_error = e
+            continue
             
-            return mp3_path, title
-        else:
-            raise Exception(f"Cobalt API error: {data.get('text', 'Unknown error')}")
-    else:
-        raise Exception(f"Cobalt API request failed with status {response.status_code}")
+    raise Exception(f"All Cobalt instances failed. Last error: {last_error}")
 
 def download_audio_ytdlp(url):
-    """Fallback: Downloads audio from YouTube and converts it to MP3 using yt-dlp."""
+    """Fallback: Downloads audio from YouTube using yt-dlp."""
     cookie_file = 'cookies.txt'
     ydl_opts = {
         'format': 'bestaudio/best',
@@ -78,12 +97,6 @@ def download_audio_ytdlp(url):
         'outtmpl': 'downloads/%(title)s.%(ext)s',
         'quiet': True,
         'no_warnings': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'web'],
-                'skip': ['webpage', 'hls', 'dash']
-            }
-        },
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     }
 
@@ -101,21 +114,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "http" not in url:
         return
 
-    status_message = await update.message.reply_text("📥 Processing your request via Cobalt API...")
+    status_message = await update.message.reply_text("📥 Processing your request using API rotation...")
     
     try:
-        # Try Cobalt first
         loop = asyncio.get_event_loop()
         try:
+            # Try Cobalt rotation first
             mp3_path, title = await loop.run_in_executor(None, download_audio_cobalt, url)
         except Exception as cobalt_e:
-            logger.warning(f"Cobalt API failed: {cobalt_e}. Falling back to yt-dlp...")
-            await status_message.edit_text("🔄 Cobalt API reached a limit. Falling back to local engine...")
+            logger.warning(f"All Cobalt instances failed: {cobalt_e}. Falling back to yt-dlp...")
+            await status_message.edit_text("🔄 High-load detected. Switching to local processing engine...")
             mp3_path, title = await loop.run_in_executor(None, download_audio_ytdlp, url)
 
-        await status_message.edit_text("📤 Uploading MP3... almost there!")
+        await status_message.edit_text("📤 Uploading MP3... thank you for your patience!")
 
-        # Send the file
         with open(mp3_path, 'rb') as audio:
             await update.message.reply_audio(
                 audio=audio,
@@ -123,7 +135,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 filename=f"{title}.mp3"
             )
 
-        # Cleanup
         if os.path.exists(mp3_path):
             os.remove(mp3_path)
         
@@ -139,13 +150,9 @@ if __name__ == '__main__':
 
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     
-    start_handler = CommandHandler('start', start)
-    help_handler = CommandHandler('help', help_command)
-    msg_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message)
-
-    application.add_handler(start_handler)
-    application.add_handler(help_handler)
-    application.add_handler(msg_handler)
+    application.add_handler(CommandHandler('start', start))
+    application.add_handler(CommandHandler('help', help_command))
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     
-    logger.info("Bot started successfully!")
+    logger.info("Bot started successfully (Definitive Build)!")
     application.run_polling()
