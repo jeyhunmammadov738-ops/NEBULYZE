@@ -8,6 +8,11 @@ services:
       POSTGRES_DB: ${DB_NAME:-nebulyze_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nebulyze -d nebulyze_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     deploy:
       resources:
         limits:
