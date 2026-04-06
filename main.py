@@ -31,6 +31,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def download_audio(url):
     """Downloads audio from YouTube and converts it to MP3 using yt-dlp."""
+    cookie_file = 'cookies.txt'
     ydl_opts = {
         'format': 'bestaudio/best',
         'postprocessors': [{
@@ -41,7 +42,19 @@ def download_audio(url):
         'outtmpl': 'downloads/%(title)s.%(ext)s',
         'quiet': True,
         'no_warnings': True,
+        # Bypassing workarounds for YouTube bot detection
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web'],
+                'skip': ['webpage', 'hls', 'dash']
+            }
+        },
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     }
+
+    # Use cookies if available
+    if os.path.exists(cookie_file):
+        ydl_opts['cookiefile'] = cookie_file
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
