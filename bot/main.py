@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 # Use shared components from app
 from app.tasks.worker import convert_media_task
+from app.core.downloader import downloader
 from celery.result import AsyncResult
 
 load_dotenv()
@@ -24,7 +25,6 @@ ADMIN_IDS = [int(id.strip()) for id in os.getenv("ADMIN_IDS", "").split(",") if 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-import yt_dlp
 import uuid
 
 TEMP_UPLOAD_DIR = "temp_uploads"
@@ -52,9 +52,9 @@ def get_bitrate_keyboard(media_type: str, file_path: str):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🚀 **Nebulyze: Elite Production Bot**\n\n"
+        "🚀 **Nebulyze v2: Elite Production Bot**\n\n"
         "Send me a video or a URL (YouTube, TikTok, etc.) to begin conversion.\n"
-        "Your request will be processed by our Nebula-grade worker cluster."
+        "Use `/auth` if you encounter a 'Sign in' error."
     )
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -86,49 +86,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     message = update.message
-    status_msg = await message.reply_text("🔗 Extracting URL via Nebula Core...")
-    
-    file_id = str(uuid.uuid4())
-    ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'outtmpl': os.path.join(TEMP_UPLOAD_DIR, f"{file_id}.%(ext)s"),
-        'quiet': True,
-        'no_warnings': True,
-        'nocheckcertificate': True,
-        'geo_bypass': True,
-        'postprocessors': [{'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'}],
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios'],
-                'player_skip': ['webpage', 'configs']
-            }
-        },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Referer': 'https://www.google.com/'
-        }
-    }
-    
-    # Use cookies if provided via cookies.txt in root
-    cookies_path = os.path.join(os.getcwd(), "cookies.txt")
-    if os.path.exists(cookies_path):
-        ydl_opts['cookiefile'] = cookies_path
-        logger.info("Found cookies.txt, applying to yt-dlp for bypass...")
+    status_msg = await message.reply_text("🔗 Extracting URL via Nebula Core v2...")
     
     try:
-        # Run yt-dlp in thread to avoid blocking event loop
-        def download():
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                return ydl.prepare_filename(info), info.get('title')
-
-        input_path, title = await asyncio.to_thread(download)
-        
-        # Ensure path is consistent
-        if not input_path.endswith('.mp4') and os.path.exists(os.path.splitext(input_path)[0] + '.mp4'):
-            input_path = os.path.splitext(input_path)[0] + '.mp4'
+        # Use new v2 resilient downloader
+        input_path, title = await downloader.download(url)
             
         context.user_data[input_path] = title
         
@@ -139,7 +101,32 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
     except Exception as e:
         logger.error(f"URL Extraction failed: {e}")
-        await status_msg.edit_text(f"❌ Extraction failed: {str(e)}")
+        error_text = str(e)
+        if "device code" in error_text.lower() or "google.com/device" in error_text.lower():
+            await status_msg.edit_text(f"🔑 **Auth Required**: {error_text}\n\nUse `/auth` for a manual link.")
+        else:
+            await status_msg.edit_text(f"❌ Nebula Core failed: {error_text}")
+
+async def auth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Trigger manual OAuth2 device flow."""
+    if not await is_admin(update): return
+    
+    status_msg = await update.message.reply_text("📡 Requesting Nebula Auth Token...")
+    
+    # Run a dummy extraction to trigger the OAuth2 flow
+    dummy_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    try:
+        # We use a short timeout to let the log printer show the code
+        await downloader.download(dummy_url)
+        await status_msg.edit_text("✅ Nebula core is already authorized.")
+    except Exception as e:
+        # The exception may contain the code, or it might be in stdout
+        logger.info(f"Auth info: {e}")
+        await status_msg.edit_text(
+            f"🔐 **Nebula Authorization Flow**\n\n"
+            f"Check the bot server logs for the device code or try sending a video to see the prompt.\n"
+            f"Visit: https://google.com/device"
+        )
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -213,6 +200,7 @@ if __name__ == '__main__':
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("auth", auth_command))
     app.add_handler(CallbackQueryHandler(handle_callback, pattern="^conv\|"))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.ALL, handle_media))

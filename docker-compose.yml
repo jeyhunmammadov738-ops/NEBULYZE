@@ -38,6 +38,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    volumes:
+      - cache_data:/root/.cache/yt-dlp
     deploy:
       resources:
         limits:
@@ -55,6 +57,7 @@ services:
       - api
     volumes:
       - ./temp_uploads:/app/temp_uploads
+      - cache_data:/root/.cache/yt-dlp
     deploy:
       resources:
         limits:
@@ -72,6 +75,7 @@ services:
       - db
     volumes:
       - ./temp_uploads:/app/temp_uploads
+      - cache_data:/root/.cache/yt-dlp
     deploy:
       resources:
         limits:
@@ -94,3 +98,4 @@ services:
 volumes:
   postgres_data:
   temp_uploads:
+  cache_data:

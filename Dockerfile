@@ -23,11 +23,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install runtime dependencies (FFmpeg is critical for OCI VPS)
+# Install runtime dependencies (FFmpeg and Deno are critical)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libgl1 \
     libglib2.0-0 \
+    curl \
+    unzip \
+    && curl -fsSL https://deno.land/x/install/install.sh | sh \
+    && mv /root/.deno/bin/deno /usr/local/bin/ \
+    && apt-get purge -y curl unzip \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

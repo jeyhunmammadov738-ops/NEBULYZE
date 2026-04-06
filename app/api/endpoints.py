@@ -203,6 +203,8 @@ async def download_result(request: Request, task_id: str):
     else:
         raise HTTPException(status_code=400, detail=f"Task failed or state is {res.state}.")
 
+from ..core.downloader import downloader
+
 @router.post("/url")
 @limiter.limit("3/minute")
 async def extract_url(request: Request, url_request: URLRequest):
@@ -214,48 +216,15 @@ async def extract_url(request: Request, url_request: URLRequest):
     if not validate_url(str(url_request.url)):
         raise HTTPException(status_code=400, detail="Invalid or potentially dangerous URL")
     
-    file_id = str(uuid.uuid4())
-    ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'outtmpl': os.path.join(TEMP_UPLOAD_DIR, f"{file_id}.%(ext)s"),
-        'max_filesize': 100 * 1024 * 1024, # 100MB limit
-        'quiet': True,
-        'no_warnings': True,
-        'nocheckcertificate': True,
-        'geo_bypass': True,
-        'postprocessors': [{'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'}],
-        # Bypassing YouTube "Sign in to confirm you're not a bot"
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios'],
-                'player_skip': ['configs', 'webpage']
-            }
-        },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Referer': 'https://www.google.com/'
-        }
-    }
-    
-    # Use cookies if provided via cookies.txt in root
-    cookies_path = os.path.join(os.getcwd(), "cookies.txt")
-    if os.path.exists(cookies_path):
-        ydl_opts['cookiefile'] = cookies_path
-    
     try:
         @external_api_breaker
-        def extract_with_ytdlp():
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                return ydl.extract_info(str(url_request.url), download=True)
+        def extract_with_v2():
+            # Use new v2 resilient downloader
+            return asyncio.run(downloader.download(str(url_request.url)))
         
-        info = extract_with_ytdlp()
-        input_path = yt_dlp.YoutubeDL(ydl_opts).prepare_filename(info)
-        # Ensure it's standardized to .mp4
-        if not input_path.endswith('.mp4'):
-            input_path = os.path.splitext(input_path)[0] + '.mp4'
+        input_path, title = extract_with_v2()
         
+        file_id = os.path.basename(input_path).split('.')[0]
         output_ext = "mp3" if url_request.fmt == "mp3" else "ogg"
         output_path = os.path.join(TEMP_UPLOAD_DIR, f"{file_id}_final.{output_ext}")
         
@@ -263,9 +232,8 @@ async def extract_url(request: Request, url_request: URLRequest):
         
         return {
             "task_id": task.id,
-            "title": info.get('title'),
-            "uploader": info.get('uploader'),
+            "title": title,
             "status": "QUEUED"
         }
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"URL Extraction Failed: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"URL Extraction Failed: {str(e)}")
