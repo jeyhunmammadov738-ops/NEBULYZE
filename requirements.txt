@@ -1,4 +1,11 @@
-python-telegram-bot==21.0.1
-yt-dlp==2024.03.10
-redis==5.0.3
-python-dotenv==1.0.0
+python-telegram-bot==20.8
+yt-dlp>=2025.01.01
+redis>=5.0.0
+python-dotenv>=1.0.0
+moviepy>=1.0.3
+imageio-ffmpeg>=0.4.9
+imageio>=2.34.0
+pydub>=0.25.1
+aiohttp>=3.9.3
+asyncio>=3.4.3
+psutil>=5.9.8
