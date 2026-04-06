@@ -1,122 +1,100 @@
 import os
-import logging
 import asyncio
-import uuid
-import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+import logging
+import yt_dlp
 from dotenv import load_dotenv
-from app.engine import engine
+from telegram import Update
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CommandHandler
 
+# Load environment variables
 load_dotenv()
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TEMP_DIR = "temp_uploads"
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# Professional Logging for VPS
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+# Setup logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🚀 **Nebulyze v6: The API Bridge**\n\n"
-        "Bana bir YouTube linki gonder, videoyu indireyim.\n"
-        "Artik 'Sign-in' hatasi yok. Direkt extraction baslatildi.\n\n"
-        "Format secin (Video veya Ses)."
+        "👋 Welcome to the YouTube to MP3 Downloader Bot!\n\n"
+        "Simply send me a YouTube link, and I'll convert it to a high-quality MP3 file for you. 🎵"
     )
 
-def get_options_keyboard(file_path: str):
-    keyboard = [
-        [
-            InlineKeyboardButton("📥 Video (MP4)", callback_data=f"v6|mp4|{file_path}"),
-            InlineKeyboardButton("🎵 Ses (MP3)", callback_data=f"v6|mp3|{file_path}")
-        ]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "To use this bot, just paste a YouTube video link. I'll handle the rest!\n\n"
+        "Supported platforms: YouTube, YouTube Music, and more (via yt-dlp)."
+    )
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text.strip()
-    if not url.startswith("http"): return
-    
-    # Mirroring the status feedback style from your local project
-    status_msg = await update.message.reply_text("Indiriliyor ve isleniyor (V6 Bridge)...")
+def download_audio(url):
+    """Downloads audio from YouTube and converts it to MP3 using yt-dlp."""
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'outtmpl': 'downloads/%(title)s.%(ext)s',
+        'quiet': True,
+        'no_warnings': True,
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        filename = ydl.prepare_filename(info)
+        # yt-dlp changes the extension to .mp3 after post-processing
+        mp3_filename = os.path.splitext(filename)[0] + ".mp3"
+        return mp3_filename, info.get('title', 'audio')
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text
+    if "youtube.com" not in url and "youtu.be" not in url:
+        return
+
+    status_message = await update.message.reply_text("📥 Processing your request... Please wait.")
     
     try:
-        # Step 1: External API extraction (Bypasses VPS block)
-        input_path, title = await engine.extract_via_bridge(url)
+        # Run download in a separate thread to avoid blocking the event loop
+        loop = asyncio.get_event_loop()
+        mp3_path, title = await loop.run_in_executor(None, download_audio, url)
+
+        await status_message.edit_text("📤 Uploading MP3... almost there!")
+
+        # Send the file
+        with open(mp3_path, 'rb') as audio:
+            await update.message.reply_audio(
+                audio=audio,
+                title=title,
+                filename=f"{title}.mp3"
+            )
+
+        # Cleanup
+        if os.path.exists(mp3_path):
+            os.remove(mp3_path)
         
-        file_size_mb = os.path.getsize(input_path) / 1_048_576
-        logger.info(f"V6 Bridged Download: {input_path} ({file_size_mb:.1f} MB)")
-        
-        await status_msg.edit_text(
-             f"✅ **Bulundu**: {title}\n"
-             f"Boyut: {file_size_mb:.1f} MB\n"
-             "Format secin:",
-            reply_markup=get_options_keyboard(input_path)
-        )
+        await status_message.delete()
+
     except Exception as e:
-        logger.error(f"v6 Bridge extraction failed: {e}")
-        await status_msg.edit_text(f"❌ Indirme basarisiz (V6 Error):\n{str(e)[:300]}")
+        logger.error(f"Error downloading {url}: {e}")
+        await status_message.edit_text(f"❌ Sorry, an error occurred while processing your request: {str(e)}")
 
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    _, mode, file_path = query.data.split('|')
-    
-    if mode == "mp4":
-        await query.edit_message_text("📤 Video yukleniyor...")
-        try:
-            with open(file_path, 'rb') as f:
-                await query.message.reply_video(
-                    video=f,
-                    supports_streaming=True,
-                    caption=f"Video indirildi! ({os.path.getsize(file_path)/1_048_576:.1f} MB)"
-                )
-            await query.edit_message_text("✅ Tamamlandi!")
-        except Exception as e:
-            await query.edit_message_text(f"❌ Video yukleme hatasi: {str(e)}")
-            
-    elif mode == "mp3":
-        await query.edit_message_text("⚡ Ses donusturuluyor...")
-        output_path = f"{file_path}.mp3"
-        try:
-            # Local conversion via FFmpeg
-            final_file = await asyncio.to_thread(engine.convert_to_mp3, file_path, output_path)
-            
-            with open(final_file, 'rb') as f:
-                await query.message.reply_audio(
-                    audio=f,
-                    title=os.path.basename(file_path),
-                    caption=f"Ses indirildi! ({os.path.getsize(final_file)/1_048_576:.1f} MB)"
-                )
-            await query.edit_message_text("✅ Tamamlandi!")
-        except Exception as e:
-            await query.edit_message_text(f"❌ Ses donusturme hatasi: {str(e)}")
-        finally:
-            if os.path.exists(output_path):
-                asyncio.create_task(delayed_cleanup(output_path))
-    
-    # Cleanup of original media file
-    asyncio.create_task(delayed_cleanup(file_path))
+if __name__ == '__main__':
+    if not os.path.exists('downloads'):
+        os.makedirs('downloads')
 
-async def delayed_cleanup(path: str):
-    await asyncio.sleep(1800) # 30 min retention
-    if os.path.exists(path):
-        try: os.remove(path)
-        except: pass
-
-def main():
-    if not TOKEN:
-        print("❌ TELEGRAM_BOT_TOKEN missing")
-        return
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
     
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(handle_callback, pattern="^v6\|"))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
-    
-    logger.info("Nebulyze v6 (API Bridge) is ONLINE")
-    app.run_polling()
+    start_handler = CommandHandler('start', start)
+    help_handler = CommandHandler('help', help_command)
+    msg_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message)
 
-if __name__ == "__main__":
-    main()
+    application.add_handler(start_handler)
+    application.add_handler(help_handler)
+    application.add_handler(msg_handler)
+    
+    logger.info("Bot started successfully!")
+    application.run_polling()
