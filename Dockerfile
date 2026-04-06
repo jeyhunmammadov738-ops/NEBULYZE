@@ -1,61 +1,25 @@
-# Use a multi-arch compatible base image
-FROM python:3.11-slim as builder
-
-# Set build-time environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
-
-WORKDIR /install
-
-# Install system build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install python dependencies to a staging directory
-COPY requirements.txt .
-RUN pip install --prefix=/install -r requirements.txt
-
-# --- Final Production Image ---
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install runtime dependencies (FFmpeg and Deno are critical)
+# Install FFmpeg and basic utils
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    libgl1 \
-    libglib2.0-0 \
     curl \
     unzip \
-    && curl -fsSL https://deno.land/x/install/install.sh | sh \
-    && mv /root/.deno/bin/deno /usr/local/bin/ \
-    && apt-get purge -y curl unzip \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy installed python packages from builder
-COPY --from=builder /install /usr/local
+# Install Deno for yt-dlp signatures
+RUN curl -fsSL https://deno.land/x/install/install.sh | sh \
+    && mv /root/.deno/bin/deno /usr/local/bin/
 
-# Copy application code
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p temp_uploads logs
+# Shared temp directory
+RUN mkdir -p temp_uploads
 
-# Default environment variables
-ENV ENVIRONMENT=production \
-    PORT=8000
-
-# Expose API port
-EXPOSE 8000
-
-# Metadata
-LABEL maintainer="Nebulyze Team" \
-      version="2.0.0" \
-      description="Elite MP4 to MP3 Conversion Bot"
-
-# Entry point is handled by docker-compose or specific command
-CMD ["python", "app/main.py"]
+CMD ["python", "bot.py"]
