@@ -24,48 +24,46 @@ DOWNLOADS_DIR = os.path.join(BASE_DIR, "downloads")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Welcome! I am your streamlined yt-dlp YouTube to MP3 Bot.\n\n"
-        "I am now using your personal cookies for 100% reliable downloads. Simply send me a link!"
+        "👋 Welcome! Your hardened YouTube to MP3 Bot is ready.\n\n"
+        "I am now using your personal cookies and iOS client spoofing for maximum reliability. Send me a link!"
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "This bot uses the latest yt-dlp engine with cookie authentication.\n\n"
-        "If you need to update your session, use /cookies for instructions."
+        "This bot is hardened with iOS client spoofing and your personal session.\n\n"
+        "If you encounter issues, try refreshing your cookies at google.com/device."
     )
-
-async def cookies_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    instructions = (
-        "🛡 **How to update your session:**\n\n"
-        "1. Install 'Get cookies.txt LOCALLY' extension.\n"
-        "2. Export Netscape cookies from YouTube.com.\n"
-        "3. Send the `cookies.txt` file to this bot."
-    )
-    await update.message.reply_text(instructions, parse_mode='Markdown')
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
     if doc.file_name == "cookies.txt":
         new_file = await context.bot.get_file(doc.file_id)
         await new_file.download_to_drive(COOKIE_FILE)
-        await update.message.reply_text("✅ `cookies.txt` updated! Authenticated session is active.")
+        await update.message.reply_text("✅ `cookies.txt` updated! Hardened session active.")
     else:
         await update.message.reply_text("⚠️ Please upload a Netscape-formatted `cookies.txt`.")
 
 def download_audio_ytdlp(url):
-    """Downloads audio from YouTube using yt-dlp with absolute cookie paths."""
+    """Downloads audio from YouTube using hardened yt-dlp config."""
     ydl_opts = {
         'format': 'bestaudio/best',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
-            'preferredquality': '320', # High quality 320kbps
+            'preferredquality': '320',
         }],
         'outtmpl': os.path.join(DOWNLOADS_DIR, '%(title)s.%(ext)s'),
         'quiet': True,
         'no_warnings': True,
         'noprogress': True,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+        # Hardened extractor args for iOS client spoofing
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['ios'],
+                'skip': ['webpage', 'player_response'],
+            }
+        }
     }
 
     if os.path.exists(COOKIE_FILE):
@@ -83,11 +81,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "http" not in url:
         return
 
-    status_message = await update.message.reply_text("📥 Processing your request using yt-dlp...")
+    status_message = await update.message.reply_text("📥 Processing your request using hardened yt-dlp...")
     
     try:
         loop = asyncio.get_event_loop()
-        # Direct yt-dlp execution (no more Cobalt rotation)
         mp3_path, title = await loop.run_in_executor(None, download_audio_ytdlp, url)
 
         await status_message.edit_text("📤 Uploading high-quality MP3...")
@@ -106,10 +103,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_message.delete()
 
     except Exception as e:
-        logger.error(f"yt-dlp error for {url}: {e}")
+        logger.error(f"yt-dlp hardened error for {url}: {e}")
         error_msg = str(e)
         if "Sign in" in error_msg or "account" in error_msg.lower():
-            final_msg = "❌ **YouTube required a sign-in** (even with cookies). Please re-export your `cookies.txt` and send it to me again."
+            final_msg = "❌ **Hardened block detected.** Even with iOS spoofing, Google required a sign-in. Please visit [google.com/device](https://google.com/device) in your browser first to clear any security checks."
         else:
             final_msg = f"❌ Error: {error_msg}"
         
@@ -123,9 +120,8 @@ if __name__ == '__main__':
     
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('help', help_command))
-    application.add_handler(CommandHandler('cookies', cookies_command))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     
-    logger.info("Bot started successfully (Exclusive yt-dlp Build)!")
+    logger.info("Bot started successfully (Hardened Exclusive Build)!")
     application.run_polling()
