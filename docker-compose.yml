@@ -48,6 +48,8 @@ services:
     restart: always
     command: python bot/main.py
     env_file: .env
+    environment:
+      - PYTHONPATH=/app
     depends_on:
       - redis
       - api
@@ -63,6 +65,8 @@ services:
     restart: always
     command: celery -A app.tasks.worker worker --loglevel=info --concurrency=2
     env_file: .env
+    environment:
+      - PYTHONPATH=/app
     depends_on:
       - redis
       - db
@@ -78,6 +82,8 @@ services:
     restart: always
     command: celery -A app.tasks.celery_app beat --loglevel=info
     env_file: .env
+    environment:
+      - PYTHONPATH=/app
     depends_on:
       - redis
     deploy:
