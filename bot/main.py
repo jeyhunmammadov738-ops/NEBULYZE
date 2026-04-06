@@ -97,8 +97,25 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'nocheckcertificate': True,
         'geo_bypass': True,
         'postprocessors': [{'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'}],
-        'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios'],
+                'player_skip': ['webpage', 'configs']
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Referer': 'https://www.google.com/'
+        }
     }
+    
+    # Use cookies if provided via cookies.txt in root
+    cookies_path = os.path.join(os.getcwd(), "cookies.txt")
+    if os.path.exists(cookies_path):
+        ydl_opts['cookiefile'] = cookies_path
+        logger.info("Found cookies.txt, applying to yt-dlp for bypass...")
     
     try:
         # Run yt-dlp in thread to avoid blocking event loop
