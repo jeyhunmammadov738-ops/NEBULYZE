@@ -10,7 +10,7 @@ from ..circuit_breakers import redis_breaker
 logger = logging.getLogger(__name__)
 
 TEMP_DIRS = ["temp_uploads", "temp_files"]
-MAX_AGE_SECONDS = 3600 # 1 hour
+MAX_AGE_SECONDS = 1800 # 30 minutes (Oracle VPS aggressive cleanup)
 
 @celery_app.task(name="app.tasks.backend_cleanup.auto_cleanup_task")
 def auto_cleanup_task():

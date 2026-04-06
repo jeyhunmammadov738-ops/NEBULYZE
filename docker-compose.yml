@@ -1,0 +1,85 @@
+services:
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER:-nebulyze}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-nebulyze_pass}
+      POSTGRES_DB: ${DB_NAME:-nebulyze_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  api:
+    build: .
+    restart: always
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  bot:
+    build: .
+    restart: always
+    command: python bot/main.py
+    env_file: .env
+    depends_on:
+      - redis
+      - api
+    volumes:
+      - ./temp_uploads:/app/temp_uploads
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  worker:
+    build: .
+    restart: always
+    command: celery -A app.tasks.worker worker --loglevel=info --concurrency=2
+    env_file: .env
+    depends_on:
+      - redis
+      - db
+    volumes:
+      - ./temp_uploads:/app/temp_uploads
+    deploy:
+      resources:
+        limits:
+          memory: 2G # Higher limit for FFmpeg/MoviePy spikes
+
+  beat:
+    build: .
+    restart: always
+    command: celery -A app.tasks.celery_app beat --loglevel=info
+    env_file: .env
+    depends_on:
+      - redis
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+volumes:
+  postgres_data:
+  temp_uploads:

@@ -30,6 +30,26 @@ import uuid
 TEMP_UPLOAD_DIR = "temp_uploads"
 os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
 
+async def is_admin(update: Update):
+    """Check if the user is an authorized admin."""
+    user_id = update.effective_user.id
+    if user_id in ADMIN_IDS:
+        return True
+    await update.message.reply_text("⛔ **Access Denied**: Unauthorized Nebula terminal access.")
+    return False
+
+def get_bitrate_keyboard(media_type: str, file_path: str):
+    """Generate inline keyboard for bitrate selection."""
+    keyboard = [
+        [
+            InlineKeyboardButton("128k (Fast)", callback_data=f"conv|128k|{media_type}|{file_path}"),
+            InlineKeyboardButton("192k (Standard)", callback_data=f"conv|192k|{media_type}|{file_path}"),
+            InlineKeyboardButton("320k (Pro)", callback_data=f"conv|320k|{media_type}|{file_path}")
+        ],
+        [InlineKeyboardButton("🎤 Convert to Voice (OGG)", callback_data=f"conv|voice|{media_type}|{file_path}")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🚀 **Nebulyze: Elite Production Bot**\n\n"
@@ -45,34 +65,20 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_id = str(uuid.uuid4())
     ext = video.file_name.split('.')[-1] if hasattr(video, 'file_name') else "mp4"
     input_path = os.path.join(TEMP_UPLOAD_DIR, f"{file_id}.{ext}")
-    output_path = os.path.join(TEMP_UPLOAD_DIR, f"{file_id}_final.mp3")
     
     status_msg = await message.reply_text("📥 Downloading media to Nebula cluster...")
     
-    new_file = await context.bot.get_file(video.file_id)
-    await new_file.download_to_drive(input_path)
-    
-    await status_msg.edit_text("🔄 Enqueuing for studio-grade conversion...")
-    
-    # Enqueue task
-    task = convert_media_task.delay(input_path, output_path, "192k", "mp3")
-    
-    await status_msg.edit_text(
-        f"✅ Task Enqueued!\n"
-        f"Task ID: `{task.id}`\n\n"
-        "I will send you the finished file shortly."
-    )
-    
-    # Simple polling for completion (in production, use a callback/webhook)
-    while True:
-        res = AsyncResult(task.id)
-        if res.state == "SUCCESS":
-            await message.reply_audio(audio=open(output_path, 'rb'), title="Converted by Nebulyze")
-            break
-        elif res.state == "FAILURE":
-            await message.reply_text("❌ Conversion failed during processing.")
-            break
-        await asyncio.sleep(2)
+    try:
+        new_file = await context.bot.get_file(video.file_id)
+        await new_file.download_to_drive(input_path)
+        
+        await status_msg.edit_text(
+            "✅ Downloaded!\nSelect desired output quality:",
+            reply_markup=get_bitrate_keyboard("file", input_path)
+        )
+    except Exception as e:
+        logger.error(f"Download failed: {e}")
+        await status_msg.edit_text(f"❌ Nebula download failed: {str(e)}")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
@@ -91,60 +97,109 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'nocheckcertificate': True,
         'geo_bypass': True,
         'postprocessors': [{'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'}],
-        # Bypassing YouTube "Sign in to confirm you're not a bot"
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios'],
-                'player_skip': ['configs', 'webpage']
-            }
-        }
+        'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}
     }
     
-    # Use cookies if provided via cookies.txt in root
-    cookies_path = os.path.join(os.getcwd(), "cookies.txt")
-    if os.path.exists(cookies_path):
-        ydl_opts['cookiefile'] = cookies_path
-    
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            input_path = ydl.prepare_filename(info)
-            if not input_path.endswith('.mp4'):
-                input_path = os.path.splitext(input_path)[0] + '.mp4'
+        # Run yt-dlp in thread to avoid blocking event loop
+        def download():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                return ydl.prepare_filename(info), info.get('title')
+
+        input_path, title = await asyncio.to_thread(download)
+        
+        # Ensure path is consistent
+        if not input_path.endswith('.mp4') and os.path.exists(os.path.splitext(input_path)[0] + '.mp4'):
+            input_path = os.path.splitext(input_path)[0] + '.mp4'
             
-            output_path = os.path.join(TEMP_UPLOAD_DIR, f"{file_id}_final.mp3")
-            
-            await status_msg.edit_text("🔄 Enqueuing for studio-grade conversion...")
-            task = convert_media_task.delay(input_path, output_path, "192k", "mp3")
-            
-            # Simple polling for completion
-            while True:
-                res = AsyncResult(task.id)
-                if res.state == "SUCCESS":
-                    await message.reply_audio(audio=open(output_path, 'rb'), title=info.get('title'))
-                    break
-                elif res.state == "FAILURE":
-                    await status_msg.edit_text("❌ URL conversion failed.")
-                    break
-                await asyncio.sleep(2)
+        context.user_data[input_path] = title
+        
+        await status_msg.edit_text(
+            f"🎬 **Found**: {title}\nSelect desired output quality:",
+            reply_markup=get_bitrate_keyboard("url", input_path)
+        )
                 
     except Exception as e:
-        await status_msg.edit_text(f"❌ Error: {str(e)}")
+        logger.error(f"URL Extraction failed: {e}")
+        await status_msg.edit_text(f"❌ Extraction failed: {str(e)}")
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    # Format: conv|bitrate|type|path
+    data = query.data.split('|')
+    if len(data) < 4: return
+    
+    bitrate = data[1]
+    media_type = data[2]
+    input_path = data[3]
+    
+    fmt = "mp3" if bitrate != "voice" else "ogg"
+    output_path = input_path.rsplit('.', 1)[0] + f"_final.{fmt}"
+    
+    await query.edit_message_text(f"🔄 Enqueuing {bitrate} conversion task...")
+    
+    # Enqueue task
+    task = convert_media_task.delay(input_path, output_path, bitrate, fmt)
+    
+    # Safe non-blocking polling
+    max_retries = 150 # ~5 mins
+    for _ in range(max_retries):
+        res = AsyncResult(task.id)
+        if res.state == "SUCCESS":
+            title = context.user_data.get(input_path, "Converted by Nebulyze")
+            try:
+                if bitrate == "voice":
+                    await query.message.reply_voice(voice=open(output_path, 'rb'), caption=title)
+                else:
+                    await query.message.reply_audio(audio=open(output_path, 'rb'), title=title)
+                await query.delete_message()
+            except Exception as e:
+                await query.message.reply_text(f"❌ Error sending file: {str(e)}")
+            
+            # Final cleanup
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            return
+            
+        elif res.state == "FAILURE":
+            await query.edit_message_text("❌ Nebula process failed during conversion.")
+            return
+            
+        await asyncio.sleep(2)
+    
+    await query.edit_message_text("⌛ Task timed out. Please try again later.")
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📊 **Nebulyze System Stats**\n\nCluster Status: ONLINE 🟢")
+    if not await is_admin(update): return
+    
+    # Count files in temp_uploads
+    files = os.listdir(TEMP_UPLOAD_DIR)
+    total_size = sum(os.path.getsize(os.path.join(TEMP_UPLOAD_DIR, f)) for f in files) / (1024*1024)
+    
+    await update.message.reply_text(
+        f"📊 **Nebulyze System Stats**\n\n"
+        f"Cluster Status: ONLINE 🟢\n"
+        f"Temp Files: {len(files)}\n"
+        f"Disk Usage: {total_size:.2f} MB\n"
+        f"Admin Count: {len(ADMIN_IDS)}"
+    )
 
 if __name__ == '__main__':
     if not TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN missing!")
         exit(1)
 
-    app = ApplicationBuilder().token(TOKEN).read_timeout(30).write_timeout(30).build()
+    app = ApplicationBuilder().token(TOKEN).read_timeout(60).write_timeout(60).build()
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CallbackQueryHandler(handle_callback, pattern="^conv\|"))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.ALL, handle_media))
     
     logger.info("Nebulyze Bot starting...")
     app.run_polling()
+
