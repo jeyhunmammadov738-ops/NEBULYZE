@@ -35,7 +35,8 @@ async def is_admin(update: Update):
     user_id = update.effective_user.id
     if user_id in ADMIN_IDS:
         return True
-    logger.warning(f"Unauthorized access attempt by user_id: {user_id}")
+    # Direct print for Docker logs visibility
+    print(f"CRITICAL ACCESS LOG: User ID {user_id} is seeking terminal access. Not in: {ADMIN_IDS}")
     await update.message.reply_text("⛔ **Access Denied**: Unauthorized Nebula terminal access.")
     return False
 
