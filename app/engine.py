@@ -1,102 +1,83 @@
 import os
 import logging
 import asyncio
-import yt_dlp
+import aiohttp
 import uuid
 import subprocess
-from typing import Optional, Tuple, Dict, Any
+from typing import Tuple, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-class NebulaV5Stealth:
+class NebulaV6Bridge:
     """
-    Nebulyze v5: Stealth Core (PO-Token & Mobile Client Logic)
-    Bypasses "Sign in to confirm you're not a bot" on Oracle VPS.
+    Nebulyze v3: API Bridge Engine
+    Offloads extraction to external infrastructure to bypass the VPS IP block.
     """
     
     TEMP_DIR = "temp_uploads"
-    MAX_FILESIZE = 49 * 1024 * 1024 # 49 MB for Telegram
-    
-    # Mirror-Hybrid Format (yt-bot proven)
-    YDL_FORMAT = (
-        "bestvideo[ext=mp4][vcodec^=avc1][filesize<?49M]+"
-        "bestaudio[ext=m4a][filesize<?49M]/"
-        "bestvideo[ext=mp4][filesize<?49M]+bestaudio[filesize<?49M]/"
-        "best[ext=mp4][filesize<?49M]/"
-        "best[filesize<?49M]/"
-        "best"
-    )
+    # A public stable instance of the Cobalt API
+    COBALT_API = "https://api.cobalt.tools/api/json"
 
     def __init__(self):
         os.makedirs(self.TEMP_DIR, exist_ok=True)
 
-    def get_ydl_opts(self, player_client: str = "ios,android") -> Dict[str, Any]:
-        file_id = str(uuid.uuid4())
-        return {
-            "format": self.YDL_FORMAT,
-            "merge_output_format": "mp4",
-            "outtmpl": os.path.join(self.TEMP_DIR, f"{file_id}.%(ext)s"),
-            "max_filesize": self.MAX_FILESIZE,
-            "noplaylist": True,
-            "quiet": True,
-            "no_warnings": True,
-            "nocheckcertificate": True,
-            # Stealth Extractor Args for 2026 Bypass
-            'extractor_args': {
-                'youtube': {
-                    'player_client': player_client.split(','),
-                    # Use the Deno po-token generator natively if available
-                    'po_token': ['web+web_music:auto', 'ios:auto', 'android:auto'],
-                }
-            },
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1',
-                'Accept': '*/*',
-                'Accept-Language': 'en-US,en;q=0.9',
-            }
+    async def extract_via_bridge(self, url: str) -> Tuple[str, str]:
+        """Send URL to the external Bridge API to bypass VPS block."""
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "url": url,
+            "vQuality": "720",
+            "aFormat": "mp3", # Request MP3 directly if possible
+            "isAudioOnly": False, # Extract video first to ensure stability
         }
 
-    async def extract_video(self, url: str) -> Tuple[str, str]:
-        """Attempt extraction with Stealth PO-Token generation."""
-        # Cycle through clients: Mobile -> TV -> Web (Stealth)
-        clients = ["ios,android", "tv,web", "mweb"]
-        last_error = None
-
-        for client in clients:
+        async with aiohttp.ClientSession() as session:
             try:
-                opts = self.get_ydl_opts(client)
-                logger.info(f"V5 Attempting extraction (Client: {client})...")
-                
-                def _sync_extract():
-                    with yt_dlp.YoutubeDL(opts) as ydl:
-                        info = ydl.extract_info(url, download=True)
-                        path = ydl.prepare_filename(info)
+                logger.info(f"V6 Bridging URL: {url}")
+                async with session.post(self.COBALT_API, json=data, headers=headers) as resp:
+                    if resp.status != 200:
+                        error_data = await resp.text()
+                        raise Exception(f"Bridge API returned {resp.status}: {error_data}")
+                    
+                    result = await resp.json()
+                    status = result.get("status")
+                    
+                    if status == "error":
+                        raise Exception(f"Bridge Error: {result.get('text', 'Unknown')}")
+                    
+                    stream_url = result.get("url")
+                    filename = result.get("filename", "nebula_media")
+                    
+                    # Download the final media file to the VPS
+                    input_path = os.path.join(self.TEMP_DIR, f"{str(uuid.uuid4())}_{filename}")
+                    async with session.get(stream_url) as file_resp:
+                        if file_resp.status != 200:
+                            raise Exception(f"Failed to fetch media from Bridge: {file_resp.status}")
                         
-                        if not os.path.exists(path):
-                            base = os.path.splitext(path)[0]
-                            for ext in (".mp4", ".mkv", ".webm"):
-                                if os.path.exists(base + ext):
-                                    path = base + ext
-                                    break
-                                    
-                        return path, info.get('title', 'Nebula Media')
-
-                return await asyncio.to_thread(_sync_extract)
+                        with open(input_path, 'wb') as f:
+                            f.write(await file_resp.read())
+                    
+                    return input_path, filename
+                    
             except Exception as e:
-                last_error = e
-                logger.warning(f"V5 Client {client} failed: {e}")
-                continue
-
-        raise Exception(f"All V5 stealth paths failed: {str(last_error)}")
+                logger.error(f"V6 Bridge failed: {e}")
+                raise Exception(f"Nebula v6 Alternative Engine failed: {str(e)}")
 
     def convert_to_mp3(self, input_path: str, output_path: str) -> str:
-        """Strip audio from the stealth-acquired media."""
+        """Standard MP3 conversion for local delivery."""
         cmd = [
             "ffmpeg", "-y", "-i", input_path,
             "-vn", "-ar", "44100", "-ac", "2", "-b:a", "192k",
             output_path
         ]
-        subprocess.run(cmd, check=True, capture_output=True)
-        return output_path
+        try:
+            subprocess.run(cmd, check=True, capture_output=True)
+            return output_path
+        except Exception as e:
+            logger.error(f"FFmpeg conversion failed: {e}")
+            raise
 
-engine = NebulaV5Stealth()
+engine = NebulaV6Bridge()
